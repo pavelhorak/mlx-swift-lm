@@ -474,7 +474,7 @@ private class LanguageModel: Module, KVCacheDimensionProvider {
 
 // MARK: - Vision Model Components
 
-private class VisionAttention: Module {
+class VisionAttention: Module {
     @ModuleInfo(key: "q_proj") var queryProj: Linear
     @ModuleInfo(key: "k_proj") var keyProj: Linear
     @ModuleInfo(key: "v_proj") var valueProj: Linear
@@ -541,7 +541,7 @@ private class VisionAttention: Module {
     }
 }
 
-private class VisionMLP: Module, UnaryLayer {
+class VisionMLP: Module, UnaryLayer {
     @ModuleInfo(key: "fc1") var fc1: Linear
     @ModuleInfo(key: "fc2") var fc2: Linear
     @ModuleInfo var activationFn: GELU
@@ -559,7 +559,7 @@ private class VisionMLP: Module, UnaryLayer {
     }
 }
 
-private class EncoderLayer: Module {
+class EncoderLayer: Module {
     @ModuleInfo(key: "self_attn") var selfAttention: VisionAttention
     @ModuleInfo(key: "layer_norm1") var layerNorm1: LayerNorm
     @ModuleInfo var mlp: VisionMLP
@@ -591,7 +591,7 @@ private class EncoderLayer: Module {
     }
 }
 
-private class Encoder: Module {
+class Encoder: Module {
     @ModuleInfo var layers: [EncoderLayer]
 
     init(config: Gemma3VisionConfiguration) {
@@ -619,7 +619,7 @@ private class Encoder: Module {
     }
 }
 
-private class VisionEmbeddings: Module, UnaryLayer {
+class VisionEmbeddings: Module, UnaryLayer {
     @ModuleInfo(key: "patch_embedding") var patchEmbedding: Conv2d
     @ModuleInfo(key: "position_embedding") var positionEmbedding: Embedding
 
@@ -680,7 +680,7 @@ private class VisionEmbeddings: Module, UnaryLayer {
     }
 }
 
-private class SigLipVisionModel: Module {
+class SigLipVisionModel: Module {
     @ModuleInfo var embeddings: VisionEmbeddings
     @ModuleInfo var encoder: Encoder
     @ModuleInfo(key: "post_layernorm") var postLayerNorm: LayerNorm
@@ -710,7 +710,7 @@ private class SigLipVisionModel: Module {
     }
 }
 
-private class VisionModel: Module {
+class VisionModel: Module {
     @ModuleInfo(key: "vision_model") var visionModel: SigLipVisionModel
 
     let modelType: String
@@ -844,7 +844,7 @@ class Gemma3MultiModalProjector: Module, UnaryLayer {
 
 /// Inserts image features into text embeddings at specified token positions
 /// Implements the multimodal fusion approach used in Gemma3 VLM
-private func maskedScatter(
+func maskedScatter(
     finalEmbedding: MLXArray,
     imageMaskExpanded: MLXArray,
     scaledImageFeatures: MLXArray

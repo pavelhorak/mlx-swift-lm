@@ -25,16 +25,16 @@ import MLXNN
 // MARK: - Configuration
 
 public struct Gemma4TextConfiguration: Codable, Sendable {
-    let modelType: String
-    let hiddenSize: Int
-    let hiddenLayers: Int
-    let intermediateSize: Int
-    let attentionHeads: Int
-    let headDim: Int
-    let globalHeadDim: Int
-    let rmsNormEps: Float
-    var vocabularySize: Int
-    let kvHeads: Int
+    public let modelType: String
+    public let hiddenSize: Int
+    public let hiddenLayers: Int
+    public let intermediateSize: Int
+    public let attentionHeads: Int
+    public let headDim: Int
+    public let globalHeadDim: Int
+    public let rmsNormEps: Float
+    public var vocabularySize: Int
+    public let kvHeads: Int
     let numGlobalKeyValueHeads: Int?
     let slidingWindow: Int
     let slidingWindowPattern: Int
@@ -824,22 +824,38 @@ public class Gemma4TextModelInner: Module {
         return (perLayerProjection + perLayerInputs) * inputScale
     }
 
+    /// VLM entry point: forward pass with pre-computed embeddings.
+    /// PLE is still computed from inputIds (image token IDs get their own PLE).
+    public func forwardWithEmbedding(
+        _ inputIds: MLXArray, inputEmbedding: MLXArray, cache: [KVCache?]? = nil
+    ) -> MLXArray {
+        var h =
+            inputEmbedding
+            * MLXArray(embedScale, dtype: .bfloat16).asType(inputEmbedding.dtype)
+        return forwardFromEmbedding(inputIds: inputIds, h: h, cache: cache)
+    }
+
     func callAsFunction(
         _ inputs: MLXArray, cache: [KVCache?]? = nil
     ) -> MLXArray {
-        // Embed and scale
         let inputEmbeddings = embedTokens(inputs)
-        var h =
-            inputEmbeddings
-            * MLXArray(embedScale, dtype: .bfloat16).asType(
-                inputEmbeddings.dtype)
+        let h = inputEmbeddings
+            * MLXArray(embedScale, dtype: .bfloat16).asType(inputEmbeddings.dtype)
+        return forwardFromEmbedding(inputIds: inputs, h: h, cache: cache)
+    }
+
+    /// Shared forward pass from pre-scaled embeddings. Used by both text-only and VLM paths.
+    /// PLE is computed from inputIds regardless of embedding source.
+    public func forwardFromEmbedding(
+        inputIds: MLXArray, h inputH: MLXArray, cache: [KVCache?]? = nil
+    ) -> MLXArray {
+        var h = inputH
 
         // Compute per-layer signals if PLE is available
         var perLayerSignals: [MLXArray?]
         if hiddenSizePerLayerInput > 0, embedTokensPerLayer != nil {
-            let tokenPLE = getPerLayerInputs(inputs)
+            let tokenPLE = getPerLayerInputs(inputIds)
             let combined = projectPerLayerInputs(h, perLayerInputs: tokenPLE)
-            // Split into per-layer slices: [B, L, num_layers, dim] → array of [B, L, dim]
             perLayerSignals = (0 ..< config.hiddenLayers).map { i in
                 combined[.ellipsis, i, 0...]
             }
@@ -847,7 +863,6 @@ public class Gemma4TextModelInner: Module {
             perLayerSignals = Array(repeating: nil, count: config.hiddenLayers)
         }
 
-        // Pad cache list for shared layers (Python lines 568-570)
         var layerCache: [KVCache?]
         if let cache {
             layerCache =
@@ -856,11 +871,8 @@ public class Gemma4TextModelInner: Module {
             layerCache = Array(repeating: nil as KVCache?, count: config.hiddenLayers)
         }
 
-        // Create masks per layer type
         let masks = makeMasks(h: h, cache: layerCache)
 
-        // Apply each layer with KV sharing
-        // Python: intermediates stores (kvState, offset) per layer
         var intermediates: [(kvState: Gemma4SharedKVState?, offset: Int?)] =
             Array(repeating: (nil, nil), count: config.hiddenLayers)
 
@@ -871,7 +883,6 @@ public class Gemma4TextModelInner: Module {
             let prevIdx = previousKVs[idx]
             let perLayerInput = perLayerSignals[idx]
 
-            // Get shared KV from the layer this one maps to
             let sharedKV = intermediates[prevIdx].kvState
             let sharedOffset = intermediates[prevIdx].offset
 
@@ -935,6 +946,29 @@ public class Gemma4TextModel: Module, LLMModel, KVCacheDimensionProvider {
         self.model = Gemma4TextModelInner(config)
         self._lmHead.wrappedValue = Linear(config.hiddenSize, config.vocabularySize, bias: false)
         super.init()
+    }
+
+    /// VLM entry point: run forward pass with pre-computed embeddings.
+    public func generateWithEmbedding(
+        _ inputIds: MLXArray, inputEmbedding: MLXArray, cache: [KVCache]? = nil
+    ) -> MLXArray {
+        let scaled = inputEmbedding
+            * MLXArray(model.embedScale, dtype: .bfloat16).asType(inputEmbedding.dtype)
+        var out = model.forwardFromEmbedding(inputIds: inputIds, h: scaled, cache: cache)
+        if config.tieWordEmbeddings {
+            out = model.embedTokens.asLinear(out)
+        } else {
+            out = lmHead(out)
+        }
+        if let softcap = config.finalLogitSoftcapping {
+            out = tanh(out / softcap) * softcap
+        }
+        return out
+    }
+
+    /// Get token embeddings (for VLM to replace image positions).
+    public func embedTokens(_ inputs: MLXArray) -> MLXArray {
+        model.embedTokens(inputs)
     }
 
     public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]? = nil) -> MLXArray {

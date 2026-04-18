@@ -51,6 +51,7 @@ let package = Package(
             name: "MLXVLM",
             dependencies: [
                 "MLXLMCommon",
+                "MLXLLM",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXOptimizers", package: "mlx-swift"),
